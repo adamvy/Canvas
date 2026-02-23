@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Canvas AI</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #111;
+      color: #ddd;
+      font-family: 'Courier New', Courier, monospace;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Canvas ── */
+    #canvas-wrap {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    #canvas {
+      display: block;
+      background: #000;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* ── Panel ── */
+    #panel {
+      background: #1e1e1e;
+      border-top: 1px solid #333;
+      display: flex;
+      flex-direction: column;
+      max-height: 52vh;
+      transition: max-height 0.2s ease;
+    }
+
+    #panel.collapsed {
+      max-height: 36px;
+      overflow: hidden;
+    }
+
+    #panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 12px;
+      cursor: pointer;
+      user-select: none;
+      border-bottom: 1px solid #333;
+      min-height: 36px;
+      flex-shrink: 0;
+    }
+
+    #panel-header span { font-size: 13px; color: #999; }
+    #panel-header .toggle { font-size: 11px; color: #666; }
+
+    #panel-body {
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    .row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    label { font-size: 11px; color: #777; white-space: nowrap; }
+
+    input[type="text"],
+    input[type="password"] {
+      flex: 1;
+      min-width: 120px;
+      background: #111;
+      border: 1px solid #3a3a3a;
+      color: #ddd;
+      padding: 5px 8px;
+      font-family: inherit;
+      font-size: 12px;
+      border-radius: 4px;
+      outline: none;
+    }
+
+    input[type="text"]:focus,
+    input[type="password"]:focus { border-color: #555; }
+
+    textarea#script {
+      width: 100%;
+      min-height: 80px;
+      max-height: 200px;
+      background: #111;
+      border: 1px solid #3a3a3a;
+      color: #ddd;
+      padding: 8px;
+      font-family: inherit;
+      font-size: 12px;
+      border-radius: 4px;
+      resize: vertical;
+      outline: none;
+    }
+
+    textarea#script:focus { border-color: #555; }
+
+    #prompt {
+      flex: 1;
+      min-width: 180px;
+      background: #111;
+      border: 1px solid #3a3a3a;
+      color: #ddd;
+      padding: 7px 10px;
+      font-family: inherit;
+      font-size: 13px;
+      border-radius: 4px;
+      outline: none;
+    }
+
+    #prompt:focus { border-color: #555; }
+
+    .btn {
+      border: none;
+      border-radius: 4px;
+      padding: 7px 14px;
+      font-family: inherit;
+      font-size: 12px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: opacity 0.1s;
+    }
+
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn:hover:not(:disabled) { opacity: 0.85; }
+
+    #btn-generate { background: #3a8eff; color: #fff; }
+    #btn-run      { background: #2a9a2a; color: #fff; }
+    #btn-clear    { background: #555;    color: #ddd; }
+
+    #status {
+      font-size: 11px;
+      min-height: 16px;
+      color: #666;
+      padding: 2px 0;
+    }
+
+    #status.loading { color: #f0a030; }
+    #status.success { color: #4caf50; }
+    #status.error   { color: #f44; }
+
+    /* ── Responsive: larger screens get a wider inner layout ── */
+    @media (min-width: 768px) {
+      #panel { max-height: 46vh; }
+    }
+  </style>
+</head>
+<body>
+
+  <div id="canvas-wrap">
+    <canvas id="canvas"></canvas>
+  </div>
+
+  <div id="panel">
+    <div id="panel-header" aria-label="Toggle panel">
+      <span>✦ Canvas AI</span>
+      <span class="toggle" id="toggle-label">▼</span>
+    </div>
+
+    <div id="panel-body">
+      <!-- Settings row -->
+      <div class="row">
+        <label for="api-key">API Key</label>
+        <input type="password" id="api-key" placeholder="sk-or-v1-…" autocomplete="off" />
+        <label for="model">Model</label>
+        <input type="text" id="model" value="moonshotai/kimi-k2" style="flex: 0 1 220px;" />
+      </div>
+
+      <!-- Script editor -->
+      <div>
+        <label for="script">Script&nbsp;<span style="color:#555;">(canvas, ctx, width, height are available)</span></label>
+        <textarea id="script" spellcheck="false" placeholder="// Your drawing script will appear here after generation.
+// You can also write or edit code directly and press Run.
+//
+// Available variables:
+//   canvas  – HTMLCanvasElement
+//   ctx     – CanvasRenderingContext2D
+//   width   – canvas width in pixels
+//   height  – canvas height in pixels
+//
+// Example:
+// ctx.fillStyle = '#4488ff';
+// ctx.beginPath();
+// ctx.arc(width/2, height/2, Math.min(width,height)*0.3, 0, Math.PI*2);
+// ctx.fill();"></textarea>
+      </div>
+
+      <!-- Prompt + action buttons -->
+      <div class="row">
+        <input type="text" id="prompt" placeholder="Describe what you want to draw…" autocomplete="off" />
+        <button class="btn" id="btn-generate">Generate ✨</button>
+        <button class="btn" id="btn-run">Run ▶</button>
+        <button class="btn" id="btn-clear">Clear</button>
+      </div>
+
+      <div id="status"></div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ── Canvas setup ── */
+  const canvasEl  = document.getElementById('canvas');
+  const ctx       = canvasEl.getContext('2d');
+  const canvasWrap = document.getElementById('canvas-wrap');
+
+  function resizeCanvas() {
+    canvasEl.width  = canvasWrap.clientWidth;
+    canvasEl.height = canvasWrap.clientHeight;
+  }
+
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
+
+  /* ── Panel toggle ── */
+  const panel       = document.getElementById('panel');
+  const panelHeader = document.getElementById('panel-header');
+  const toggleLabel = document.getElementById('toggle-label');
+
+  panelHeader.addEventListener('click', () => {
+    panel.classList.toggle('collapsed');
+    toggleLabel.textContent = panel.classList.contains('collapsed') ? '▲' : '▼';
+    // Re-fit canvas after panel resize settles
+    setTimeout(resizeCanvas, 220);
+  });
+
+  /* ── UI elements ── */
+  const apiKeyInput  = document.getElementById('api-key');
+  const modelInput   = document.getElementById('model');
+  const scriptArea   = document.getElementById('script');
+  const promptInput  = document.getElementById('prompt');
+  const statusEl     = document.getElementById('status');
+  const btnGenerate  = document.getElementById('btn-generate');
+  const btnRun       = document.getElementById('btn-run');
+  const btnClear     = document.getElementById('btn-clear');
+
+  /* ── Persist settings ── */
+  const LS_KEY  = 'canvas-ai';
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(LS_KEY) || '{}'); } catch (_) { /* ignore corrupt data */ }
+
+  apiKeyInput.value = saved.apiKey  || '';
+  modelInput.value  = saved.model   || 'moonshotai/kimi-k2';
+  scriptArea.value  = saved.script  || '';
+
+  function persist() {
+    localStorage.setItem(LS_KEY, JSON.stringify({
+      apiKey : apiKeyInput.value,
+      model  : modelInput.value,
+      script : scriptArea.value,
+    }));
+  }
+
+  apiKeyInput.addEventListener('change', persist);
+  modelInput.addEventListener('change', persist);
+  scriptArea.addEventListener('input', persist);
+
+  /* ── Status helper ── */
+  function setStatus(msg, type) {
+    statusEl.textContent = msg;
+    statusEl.className   = type || '';
+  }
+
+  /* ── Clear canvas ── */
+  function clearCanvas() {
+    ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+  }
+
+  btnClear.addEventListener('click', () => {
+    clearCanvas();
+    setStatus('Canvas cleared.', 'success');
+  });
+
+  /* ── Run script ── */
+  function runScript() {
+    const code = scriptArea.value.trim();
+    if (!code) { setStatus('No script to run.', 'error'); return; }
+
+    clearCanvas();
+    persist();
+
+    try {
+      /* eslint-disable no-new-func */
+      const fn = new Function('canvas', 'ctx', 'width', 'height', code);
+      fn(canvasEl, ctx, canvasEl.width, canvasEl.height);
+      setStatus('Script executed successfully.', 'success');
+    } catch (err) {
+      setStatus('Error: ' + err.message, 'error');
+    }
+  }
+
+  btnRun.addEventListener('click', runScript);
+
+  /* ── Generate via LLM ── */
+  const SYSTEM_PROMPT = `You are an expert HTML5 Canvas JavaScript programmer.
+The user will describe what they want to draw on a canvas.
+Respond with ONLY raw executable JavaScript — no markdown, no code fences, no explanation.
+
+Your code will be executed inside a function with exactly these four variables in scope:
+  canvas  – the HTMLCanvasElement
+  ctx     – the CanvasRenderingContext2D (2d context)
+  width   – canvas pixel width (Number)
+  height  – canvas pixel height (Number)
+
+The canvas is already cleared before your code runs. Write complete, self-contained drawing code.
+Do not use setTimeout, setInterval, requestAnimationFrame, or any async constructs.
+Do not redefine or shadow canvas, ctx, width, or height.`;
+
+  async function generate() {
+    const apiKey = apiKeyInput.value.trim();
+    const model  = modelInput.value.trim() || 'moonshotai/kimi-k2';
+    const prompt = promptInput.value.trim();
+
+    if (!apiKey) { setStatus('Please enter your OpenRouter API key.', 'error'); return; }
+    if (!prompt)  { setStatus('Please enter a prompt.', 'error'); return; }
+
+    btnGenerate.disabled = true;
+    setStatus('Generating…', 'loading');
+
+    const currentScript = scriptArea.value.trim();
+    const userMessage = currentScript
+      ? `Current script:\n\`\`\`javascript\n${currentScript}\n\`\`\`\n\nUser request: ${prompt}`
+      : prompt;
+
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization' : `Bearer ${apiKey}`,
+          'Content-Type'  : 'application/json',
+          'HTTP-Referer'  : window.location.href,
+          'X-Title'       : 'Canvas AI',
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'user',   content: userMessage   },
+          ],
+        }),
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error?.message || `Request failed with HTTP ${res.status}`);
+      }
+
+      const data = await res.json();
+      let code = (data.choices?.[0]?.message?.content || '').trim();
+
+      // Strip accidental code fences the model may still emit
+      code = code
+        .replace(/^```(?:javascript|js)?\s*/i, '')
+        .replace(/\s*```\s*$/i, '')
+        .trim();
+
+      if (!code) throw new Error('Model returned an empty response.');
+
+      scriptArea.value = code;
+      persist();
+      setStatus('Script generated! Running…', 'success');
+      runScript();
+    } catch (err) {
+      setStatus('Error: ' + err.message, 'error');
+    } finally {
+      btnGenerate.disabled = false;
+    }
+  }
+
+  btnGenerate.addEventListener('click', generate);
+
+  /* Allow Enter in prompt to trigger generation */
+  promptInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      generate();
+    }
+  });
+
+  /* ── Run persisted script on load ── */
+  if (scriptArea.value.trim()) {
+    runScript();
+  }
+})();
+</script>
+</body>
+</html>
